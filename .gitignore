@@ -1,0 +1,45 @@
+# Anchor
+.anchor
+target/
+**/*.rs.bk
+test-ledger/
+
+# IDL
+*.so
+
+# Node
+node_modules/
+dist/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Dependencies
+Cargo.lock
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Deployment artifacts
+*deployment*.json
+
+# TypeScript
+*.tsbuildinfo
+
+# Testing
+.nyc_output/
+coverage/
+
+# Misc
+*.seed
+*.pid
+*.pid.lock
