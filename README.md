@@ -10,10 +10,12 @@ A Solana program for quickly spinning up test Token-2022 (Token Extensions) mint
 
 ## Features
 
-- Token-2022 Support: Full support for Solana Token Extensions program
-- Single Global Mint: One deterministic mint per deployment
-- Auto-Initialize ATAs: Automatically creates user token accounts on first claim
-- Simple Deployment: Quick setup for testing purposes
+- **Token-2022 Support**: Full support for Solana Token Extensions program
+- **Single Global Mint**: One deterministic mint per deployment
+- **Auto-Initialize ATAs**: Automatically creates user token accounts on first claim
+- **One-Time Claims**: Users can only claim once (admin can claim multiple times)
+- **Optimized Performance**: Claim amount pre-computed during initialization to save compute units
+- **Simple Deployment**: Quick setup for testing purposes
 
 ## Architecture
 
@@ -54,14 +56,14 @@ Initial Mint: 1,000,000,000 tokens (1 billion with 9 decimals)
 
 #### claim
 
-Transfers tokens from the faucet to a user.
+Transfers tokens from the faucet to a user. Users can only claim once (checked by token balance > 0). The admin can claim multiple times.
 
 Accounts:
 - signer: User claiming tokens
 - mint_authority: PDA with transfer authority
 - mint: The Token-2022 mint
 - mint_authority_ata: Faucet's token account (source)
-- user_ata: User's token account (destination)
+- user_ata: User's token account (destination, created if needed)
 - config: Config account
 - token_program: Token-2022 program
 - associated_token_program: Associated Token Program
@@ -69,11 +71,14 @@ Accounts:
 
 Parameters: None
 
-Claim Amount: 10,000 tokens per claim (configurable)
+Claim Amount: 10,000 tokens per claim (configurable at initialization)
+
+**Anti-Spam Protection**: Regular users (non-admin) can only claim once. The program checks if the user's token balance is greater than 0 and rejects subsequent claims with `AlreadyClaimed` error.
 
 ### Errors
 
-- ArithmeticOverflow: Attempted arithmetic operation that would overflow
+- `ArithmeticOverflow`: Attempted arithmetic operation that would overflow
+- `AlreadyClaimed`: User has already claimed tokens (non-admin only)
 
 ## Quick Start
 
@@ -219,6 +224,8 @@ Tests include:
 - Token claiming functionality
 - Balance verification
 - Config validation
+- Anti-spam protection (prevents double claiming)
+- Admin privilege verification (admin can claim multiple times)
 - Error handling
 
 ### Available Scripts
@@ -254,12 +261,15 @@ yarn test
 
 This is a testing tool, not production-ready:
 
-- Deployer has freeze authority and can freeze accounts
-- No admin controls for pausing or updating
-- Fixed claim amount (configurable at deployment)
-- No rate limiting or cooldown periods
-- Anyone can claim unlimited times
-- Suitable only for devnet/testnet testing
+- **Deployer Privileges**: Deployer has freeze authority and can freeze accounts
+- **Admin Privileges**: Admin (deployer) can claim unlimited times
+- **One-Time Claims**: Non-admin users can only claim once (checked by token balance > 0)
+- **No Cooldowns**: No time-based rate limiting
+- **Fixed Claim Amount**: Claim amount is set at deployment and cannot be changed
+- **No Pause Mechanism**: No admin controls for pausing or updating the faucet
+- **Testing Only**: Suitable only for devnet/testnet testing
+
+**Note**: Users who spend their tokens can claim again since the check is `balance > 0`. This is intentional for testing flexibility.
 
 ## Program Details
 

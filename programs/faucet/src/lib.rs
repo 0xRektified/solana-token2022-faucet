@@ -41,6 +41,11 @@ pub mod faucet {
     }
 
     pub fn claim(ctx: Context<ClaimContext>) -> Result<()> {
+        if ctx.accounts.signer.key() != ctx.accounts.config.admin &&
+            ctx.accounts.user_ata.amount > 0
+        {
+            return err!(FaucetError::AlreadyClaimed);
+        }
         // Claim amount is already stored in raw units, no multiplication needed
         let amount = ctx.accounts.config.claim_amount;
         let signer_seeds: &[&[&[u8]]] = &[&[
@@ -128,6 +133,9 @@ pub struct Config {
 pub enum FaucetError {
     #[msg("Arithmetic overflow")]
     ArithmeticOverflow,
+
+    #[msg("User already claimed")]
+    AlreadyClaimed,
 }
 
 #[derive(Accounts)]

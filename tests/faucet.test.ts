@@ -1,12 +1,16 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program, BN } from "@coral-xyz/anchor";
-import { LAMPORTS_PER_SOL, Keypair, PublicKey } from "@solana/web3.js";
+import { LAMPORTS_PER_SOL, Keypair, PublicKey, Transaction } from "@solana/web3.js";
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } from "@solana/spl-token";
 import { fromWorkspace, LiteSVMProvider } from "anchor-litesvm";
 import { LiteSVM, Clock } from "litesvm";
 import { expect } from "chai";
 import { Faucet } from "../target/types/faucet";
 import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { logSvmResult } from "./utils";
+
+
+const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
 describe("faucet", () => {
   let svm: LiteSVM;
@@ -22,7 +26,7 @@ describe("faucet", () => {
   const INITIAL_SUPPLY = BigInt(1_000_000_000) * BigInt(10 ** 9);
   const CLAIM_AMOUNT = 10_000;
 
-  before(async () => {
+  beforeEach(async () => {
     payer = Keypair.generate();
 
     svm = fromWorkspace("./")
@@ -56,8 +60,6 @@ describe("faucet", () => {
       program.programId
     );
 
-    const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
-
     [mintAuthorityAta] = PublicKey.findProgramAddressSync(
       [
         mintAuthority.toBuffer(),
@@ -67,37 +69,30 @@ describe("faucet", () => {
       ASSOCIATED_TOKEN_PROGRAM_ID
     );
 
-    console.log("\nTest Setup:");
-    console.log(`  Program: ${program.programId.toString()}`);
-    console.log(`  Payer: ${payer.publicKey.toString()}`);
-    console.log(`  Mint Authority: ${mintAuthority.toString()}`);
-    console.log(`  Mint: ${mint.toString()}`);
-    console.log(`  Config: ${configPda.toString()}`);
+    const initTx = await program.methods
+      .initialize(
+        new BN(INITIAL_SUPPLY.toString()),
+        null
+      )
+      .accounts({
+        signer: payer.publicKey,
+      })
+      .transaction();
+
+    initTx.recentBlockhash = svm.latestBlockhash();
+    initTx.feePayer = payer.publicKey;
+    initTx.sign(payer);
+    svm.sendTransaction(initTx);
   });
 
   describe("Initialization", () => {
-    it("Initializes the faucet with default parameters", async () => {
-      const initTx = await program.methods
-        .initialize(
-          new BN(INITIAL_SUPPLY.toString()),
-          null
-        )
-        .accounts({
-          signer: payer.publicKey,
-        })
-        .transaction();
-
-      initTx.recentBlockhash = svm.latestBlockhash();
-      initTx.feePayer = payer.publicKey;
-      initTx.sign(payer);
-      svm.sendTransaction(initTx);
-
+    it("Verifies faucet initialized with default parameters", async () => {
       const configInfo = svm.getAccount(configPda);
       expect(configInfo).to.not.be.null;
       const config = program.coder.accounts.decode("config", Buffer.from(configInfo!.data));
 
       expect(config.admin.toString()).to.equal(payer.publicKey.toString());
-      expect(config.claimAmount.toNumber()).to.equal(10_000);
+      expect(config.claimAmount.toNumber()).to.equal(CLAIM_AMOUNT * LAMPORTS_PER_SOL);
 
       const mintAuthorityAtaInfo = svm.getAccount(mintAuthorityAta);
       expect(mintAuthorityAtaInfo).to.not.be.null;
@@ -111,10 +106,7 @@ describe("faucet", () => {
 
   describe("Claiming Functionality", () => {
     it("Successfully claims tokens and verifies balance increase", async () => {
-      const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } = await import("@solana/spl-token");
-      const { Transaction } = await import("@solana/web3.js");
 
-      const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
       const userAta = await getAssociatedTokenAddress(
         mint,
@@ -188,7 +180,7 @@ describe("faucet", () => {
       expect(configInfo).to.not.be.null;
       const config = program.coder.accounts.decode("config", Buffer.from(configInfo!.data));
 
-      expect(config.claimAmount.toNumber()).to.equal(10_000);
+      expect(config.claimAmount.toNumber()).to.equal(CLAIM_AMOUNT * LAMPORTS_PER_SOL);
     });
 
     it("Verifies decimal precision in config", async () => {
@@ -197,7 +189,7 @@ describe("faucet", () => {
 
       const claimAmountTokens = config.claimAmount.toNumber();
 
-      expect(claimAmountTokens).to.equal(10_000);
+      expect(claimAmountTokens).to.equal(CLAIM_AMOUNT * LAMPORTS_PER_SOL);
     });
   });
 
@@ -205,5 +197,155 @@ describe("faucet", () => {
     it("Tests arithmetic overflow protection", async () => {
       expect(CLAIM_AMOUNT).to.be.lessThan(Number.MAX_SAFE_INTEGER / 1e9);
     });
+
+    it("Prevents double claiming for non-admin users", async () => {
+      const newUser = Keypair.generate();
+      svm.airdrop(newUser.publicKey, BigInt(10 * LAMPORTS_PER_SOL));
+
+      const userAta = await getAssociatedTokenAddress(
+        mint,
+        newUser.publicKey,
+        false,
+        TOKEN_2022_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+
+      const firstClaimTx = await program.methods
+        .claim()
+        .accounts({
+          signer: newUser.publicKey,
+        })
+        .transaction();
+
+      firstClaimTx.recentBlockhash = svm.latestBlockhash();
+      firstClaimTx.feePayer = newUser.publicKey;
+      firstClaimTx.sign(newUser);
+
+      svm.sendTransaction(firstClaimTx);
+
+      const userAtaInfo = svm.getAccount(userAta);
+      expect(userAtaInfo).to.not.be.null;
+      const userData = Buffer.from(userAtaInfo!.data);
+      const userBalance = userData.readBigUInt64LE(64);
+      expect(userBalance > BigInt(0)).to.be.true;
+
+      const secondClaimTx = await program.methods
+        .claim()
+        .accounts({
+          signer: newUser.publicKey,
+        })
+        .transaction();
+
+      secondClaimTx.recentBlockhash = svm.latestBlockhash();
+      secondClaimTx.feePayer = newUser.publicKey;
+      secondClaimTx.sign(newUser);
+
+      try {
+        svm.sendTransaction(secondClaimTx);
+
+        expect.fail("Second claim should have failed");
+      } catch (error: any) {
+      }
+    });
+
+    it("Prevents double claiming within same transaction", async () => {
+      const newUser = Keypair.generate();
+      svm.airdrop(newUser.publicKey, BigInt(10 * LAMPORTS_PER_SOL));
+
+      const firstClaimIx = await program.methods
+        .claim()
+        .accounts({
+          signer: newUser.publicKey,
+        })
+        .instruction();
+
+      const secondClaimIx = await program.methods
+        .claim()
+        .accounts({
+          signer: newUser.publicKey,
+        })
+        .instruction();
+
+      const tx = new Transaction().add(firstClaimIx, secondClaimIx);
+      tx.recentBlockhash = svm.latestBlockhash();
+      tx.feePayer = newUser.publicKey;
+      tx.sign(newUser);
+
+      try {
+        svm.sendTransaction(tx);
+        expect.fail("Transaction with double claim should have failed");
+      } catch (error: any) {
+        console.log("Double claim prevented as expected");
+      }
+    });
+
+    it("Allows admin first claim", async () => {
+      const adminAta = await getAssociatedTokenAddress(
+        mint,
+        payer.publicKey,
+        false,
+        TOKEN_2022_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+
+      const firstAdminClaim = await program.methods
+        .claim()
+        .accounts({
+          signer: payer.publicKey,
+        })
+        .transaction();
+
+      firstAdminClaim.recentBlockhash = svm.latestBlockhash();
+      firstAdminClaim.feePayer = payer.publicKey;
+      firstAdminClaim.sign(payer);
+
+      svm.sendTransaction(firstAdminClaim);
+
+      const afterFirstClaim = svm.getAccount(adminAta);
+      expect(afterFirstClaim).to.not.be.null;
+      const afterFirstData = Buffer.from(afterFirstClaim!.data);
+      const balanceAfterFirst = afterFirstData.readBigUInt64LE(64);
+      expect(balanceAfterFirst).to.equal(BigInt(CLAIM_AMOUNT) * BigInt(10 ** 9));
+    });
+
+    it("Allows admin multiple claims within same transaction", async () => {
+      const adminAta = await getAssociatedTokenAddress(
+        mint,
+        payer.publicKey,
+        false,
+        TOKEN_2022_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+
+      const firstClaimIx = await program.methods
+        .claim()
+        .accounts({
+          signer: payer.publicKey,
+        })
+        .instruction();
+
+      const secondClaimIx = await program.methods
+        .claim()
+        .accounts({
+          signer: payer.publicKey,
+        })
+        .instruction();
+
+      const tx = new Transaction().add(firstClaimIx, secondClaimIx);
+      tx.recentBlockhash = svm.latestBlockhash();
+      tx.feePayer = payer.publicKey;
+      tx.sign(payer);
+
+      const result = svm.sendTransaction(tx);
+
+      const adminAtaInfo = svm.getAccount(adminAta);
+      expect(adminAtaInfo).to.not.be.null;
+      const adminData = Buffer.from(adminAtaInfo!.data);
+      const adminBalance = adminData.readBigUInt64LE(64);
+      const expectedAmount = BigInt(CLAIM_AMOUNT) * BigInt(10 ** 9) * BigInt(2);
+      expect(adminBalance.toString()).to.equal(expectedAmount.toString());
+    });
+
+
   });
 });
