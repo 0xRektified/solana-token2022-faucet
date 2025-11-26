@@ -6,7 +6,6 @@ use anchor_spl::{
 };
 
 declare_id!("6eekuucyfcMmtCzJYFaKxXAEJHD5B3ZGEGF3kGm26mq5");
-
 const DEFAULT_CLAIM_AMOUNT: u64 = 10_000;
 
 #[program]
@@ -41,12 +40,16 @@ pub mod faucet {
     }
 
     pub fn claim(ctx: Context<ClaimContext>) -> Result<()> {
-        if ctx.accounts.signer.key() != ctx.accounts.config.admin &&
-            ctx.accounts.user_ata.amount > 0
+        if ctx.accounts.signer.key() != ctx.accounts.config.admin
+            && ctx.accounts.claim_record.claimed_at != 0
         {
             return err!(FaucetError::AlreadyClaimed);
         }
-        // Claim amount is already stored in raw units, no multiplication needed
+
+        let clock = Clock::get()?;
+        ctx.accounts.claim_record.user = ctx.accounts.signer.key();
+        ctx.accounts.claim_record.claimed_at = clock.unix_timestamp;
+
         let amount = ctx.accounts.config.claim_amount;
         let signer_seeds: &[&[&[u8]]] = &[&[
             b"mint_authority",
@@ -112,6 +115,15 @@ pub struct ClaimContext <'info>{
     pub user_ata: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
+        init_if_needed,
+        payer = signer,
+        space = 8 + ClaimRecord::INIT_SPACE,
+        seeds = [b"claim_record", signer.key().as_ref()],
+        bump
+    )]
+    pub claim_record: Account<'info, ClaimRecord>,
+
+    #[account(
         seeds = [b"config"],
         bump
     )]
@@ -127,6 +139,13 @@ pub struct ClaimContext <'info>{
 pub struct Config {
     pub admin: Pubkey,
     pub claim_amount: u64,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct ClaimRecord {
+    pub user: Pubkey,
+    pub claimed_at: i64,
 }
 
 #[error_code]
